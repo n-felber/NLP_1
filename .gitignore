@@ -1,0 +1,19 @@
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# Local data and model artifacts
+data/
+checkpoints/
+outputs/
+wandb/
+
+# Secrets
+.env
+.env.*
+
+# Jupyter
+.ipynb_checkpoints/
