@@ -58,6 +58,25 @@ Default training configuration:
 
 Training and validation loss/accuracy are logged to W&B. The best model checkpoint is saved locally in `checkpoints/`.
 
-### 5. Train Model B — RNN + Classifier
 
-*To be added after implementing Model B.*
+### 5. Train Model B — Word Embeddings + RNN + Classifier
+
+```bash
+uv run python -m src.train_rnn --rnn gru --batch-size 128
+```
+
+Default training configuration:
+- RNN: GRU (2 layers, 128 hidden units)
+- Classifier: 256 hidden units
+- Optimizer: AdamW
+- Learning rate: 0.001
+- Weight decay: 0.01
+- Batch size: 128 (adjustable for GPU memory)
+- Maximum epochs: 30
+- Early stopping patience: 8
+- Checkpoint selection: highest validation accuracy
+
+Training and validation loss/accuracy are logged to W&B.
+The best checkpoint is saved locally in `checkpoints/`.
+
+To train an LSTM instead, use `--rnn lstm`.

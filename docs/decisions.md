@@ -66,6 +66,12 @@
 - **My choice:** Use the mean of the word embeddings for each input field in the embedding-only model, and the final hidden state for each field in the RNN model.
 - **Reasoning / implications:** Averaging keeps embedding values on a comparable scale across different sequence lengths. The RNN's final hidden state summarizes the sequence in order. I will exclude padding tokens from the average and use the actual final non-padding hidden state for the RNN.
 
+## RNN Type
+
+- **Available options:** GRU or LSTM.
+- **My choice:** Use GRU for Model B, while keeping LSTM available for a possible later comparison.
+- **Reasoning / implications:** I chose GRU because ART sequences are short and GRUs are simpler, with fewer parameters than comparable LSTMs. I use the same recurrent encoder for all four fields, processing each independently before concatenating their final hidden states. This keeps the model relatively efficient while retaining word-order information.
+
 ## Batching
 
 - **Available options:** Small fixed batches, or the largest batch size that fits in GPU memory.
