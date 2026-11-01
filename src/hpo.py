@@ -1,10 +1,11 @@
-"""Parallel Optuna TPE search for ART; cached tokens and fixed 1,024 batches.
+"""Expanded, parallel Optuna TPE search for ART (fixed 1,024 batches).
 
-Place this file in src/hpo.py. Existing SQLite studies are left untouched.
+New JournalStorage studies preserve all previous studies/checkpoints.
 """
 import argparse
 import hashlib
 import json
+import math
 import multiprocessing as mp
 import os
 from concurrent.futures import ProcessPoolExecutor
@@ -28,26 +29,43 @@ from src.train_rnn import run_epoch as rnn_epoch
 ROOT = Path(__file__).resolve().parents[1]
 BATCH_SIZE = 1024
 CACHE_PATH = ROOT / "data/hpo_tokenized.pt"
+STUDY_VERSION = "expanded_v2"
 
 
 def suggest_params(trial, model_name):
     params = {
-        "learning_rate": trial.suggest_float("learning_rate", 1e-6, 1e-3, log=True),
-        "weight_decay": trial.suggest_categorical(
-            "weight_decay", [0.0, 1e-4, 1e-3, 1e-2, 1e-1]
-        ),
-        "dropout": trial.suggest_float("dropout", 0.0, 0.5),
+        "learning_rate": trial.suggest_float("learning_rate", 1e-6, 1e-1, log=True),
+        "weight_decay": trial.suggest_categorical("weight_decay", [0.0, 1e-4, 1e-3, 1e-2, 0.1, 0.2, 0.3, 0.4]),
+        "dropout": trial.suggest_float("dropout", 0.0, 0.8),
         "layer_norm": trial.suggest_categorical("layer_norm", [False, True]),
-        "classifier_hidden_dim": trial.suggest_categorical(
-            "classifier_hidden_dim", [128, 256, 512]
-        ),
+        "classifier_hidden_dim": trial.suggest_categorical("classifier_hidden_dim", [64, 128, 256, 512]),
     }
     if model_name == "gru":
-        params["rnn_hidden_dim"] = trial.suggest_categorical(
-            "rnn_hidden_dim", [64, 128, 256]
-        )
-        params["rnn_dropout"] = trial.suggest_float("rnn_dropout", 0.0, 0.4)
+        params["rnn_hidden_dim"] = trial.suggest_categorical("rnn_hidden_dim", [16, 32, 64, 128, 256])
+        params["rnn_dropout"] = trial.suggest_float("rnn_dropout", 0.0, 0.6)
+        params["bidirectional"] = trial.suggest_categorical("bidirectional", [False, True])
     return params
+
+
+def known_good_configs(model_name):
+    """Two reproducible anchors; all values are inside the expanded search space."""
+    if model_name == "embeddings":
+        return [
+            dict(learning_rate=0.0007764938896254405, weight_decay=0.1,
+                 dropout=0.012205715178020535, layer_norm=True,
+                 classifier_hidden_dim=128),
+            dict(learning_rate=1e-3, weight_decay=0.01, dropout=0.0,
+                 layer_norm=False, classifier_hidden_dim=256),
+        ]
+    return [
+        dict(learning_rate=0.0009922445325797901, weight_decay=0.1,
+             dropout=0.42536281377153073, layer_norm=True,
+             classifier_hidden_dim=256, rnn_hidden_dim=64,
+             rnn_dropout=0.37118651886594817, bidirectional=False),
+        dict(learning_rate=1e-3, weight_decay=0.01, dropout=0.0,
+             layer_norm=False, classifier_hidden_dim=256,
+             rnn_hidden_dim=128, rnn_dropout=0.0, bidirectional=False),
+    ]
 
 
 def cache_signature():
@@ -83,17 +101,18 @@ def ensure_cache(rebuild=False):
 
 
 def journal_path(model_name):
-    return ROOT / "studies" / f"optuna_{model_name}_bs1024.journal"
+    return ROOT / "studies" / f"optuna_{model_name}_{STUDY_VERSION}.journal"
 
 
 def create_study(args, worker_id=0, existing=0):
     path = journal_path(args.model)
     sampler = optuna.samplers.TPESampler(
         seed=args.seed + existing * 31 + worker_id,
-        constant_liar=True,  # Avoid suggesting similar configurations currently running.
+        constant_liar=True,  # Penalize pending trials to avoid near-duplicates.
+        multivariate=True,   # Learn interactions among hyperparameters.
     )
     return optuna.create_study(
-        study_name=f"art_{args.model}_bs1024_tpe",
+        study_name=f"art_{args.model}_{STUDY_VERSION}_tpe",
         direction="maximize",
         storage=JournalStorage(JournalFileBackend(str(path))),
         sampler=sampler,
@@ -122,7 +141,7 @@ def run_worker(args, worker_id, n_trials, existing=0):
 
     matrix = torch.from_numpy(np.load(ROOT / "data/embedding_matrix.npy"))
     epoch_fn = embedding_epoch if args.model == "embeddings" else rnn_epoch
-    study_name = f"art_{args.model}_bs1024_tpe"
+    study_name = f"art_{args.model}_{STUDY_VERSION}_tpe"
 
     def objective(trial):
         params = suggest_params(trial, args.model)
@@ -138,6 +157,7 @@ def run_worker(args, worker_id, n_trials, existing=0):
                 classifier_hidden_dim=params["classifier_hidden_dim"],
                 dropout=params["dropout"], rnn_dropout=params["rnn_dropout"],
                 use_layer_norm=params["layer_norm"],
+                bidirectional=params["bidirectional"],
             )
         model = model.to(device)
         batch_size = 8 if args.smoke_test else BATCH_SIZE
@@ -157,15 +177,16 @@ def run_worker(args, worker_id, n_trials, existing=0):
             **params, "batch_size": BATCH_SIZE, "architecture": args.model,
             "seed": args.seed, "epochs": args.epochs, "patience": args.patience,
             "optuna_study": study_name, "optuna_trial": trial.number,
+            "search_version": STUDY_VERSION,
         }
         with wandb.init(
             project="nlp-hs26-project1", entity=args.wandb_entity,
-            group=f"hpo-{args.model}-bs1024",
-            name=f"hpo-{args.model}-bs1024-t{trial.number:03d}",
+            group=f"hpo-{args.model}-{STUDY_VERSION}",
+            name=f"hpo-{args.model}-{STUDY_VERSION}-t{trial.number:03d}",
             config=config, mode="disabled" if args.smoke_test else "online",
         ) as run:
             checkpoint = (ROOT / "checkpoints" /
-                          f"hpo_{args.model}_bs1024_t{trial.number:03d}_{run.id}_best.pt")
+                          f"hpo_{args.model}_{STUDY_VERSION}_t{trial.number:03d}_{run.id}_best.pt")
             if not args.smoke_test:
                 checkpoint.parent.mkdir(exist_ok=True)
             best_accuracy, best_epoch, stale_epochs = -1.0, 0, 0
@@ -178,6 +199,10 @@ def run_worker(args, worker_id, n_trials, existing=0):
                     model, val_loader, device,
                     max_batches=1 if args.smoke_test else None,
                 )
+                # Very high suggested learning rates may diverge.
+                if not math.isfinite(train_loss) or not math.isfinite(val_loss):
+                    run.summary["status"] = "pruned_nonfinite_loss"
+                    raise optuna.TrialPruned("Non-finite train/validation loss")
                 run.log({
                     "epoch": epoch, "train/loss": train_loss,
                     "train/accuracy": train_acc, "val/loss": val_loss,
@@ -218,17 +243,13 @@ def run_worker(args, worker_id, n_trials, existing=0):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", choices=("embeddings", "gru"), required=True)
-    parser.add_argument("--trials", type=int, default=20,
-                        help="Target number of completed trials in NEW bs1024 study")
-    parser.add_argument("--workers", type=int, default=1,
-                        help="Parallel OS processes (e.g. 2, 4, or 10)")
-    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--trials", type=int, default=60, help="Target number of finished trials in the expanded study")
+    parser.add_argument("--workers", type=int, default=1, help="Parallel OS processes (e.g. 2, 4, or 10)")
+    parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--patience", type=int, default=8)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"),
-                        default="auto")
-    parser.add_argument("--wandb-entity", default=None,
-                        help="Choose the SAME W&B team/entity for every experiment")
+    parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
+    parser.add_argument("--wandb-entity", default=None, help="Choose the SAME W&B team/entity for every experiment")
     parser.add_argument("--rebuild-cache", action="store_true")
     parser.add_argument("--smoke-test", action="store_true")
     args = parser.parse_args()
@@ -243,10 +264,15 @@ def main():
     journal_path(args.model).parent.mkdir(parents=True, exist_ok=True)
     ensure_cache(args.rebuild_cache)
     study = create_study(args)
-    completed = sum(t.state == optuna.trial.TrialState.COMPLETE for t in study.trials)
-    remaining = max(0, args.trials - completed)
+    if not study.trials:
+        # Queue the best previous configurations (and baselines) before new suggestions.
+        for params in known_good_configs(args.model):
+            study.enqueue_trial(params, skip_if_exists=True)
+        print("Queued previous winner and baseline for comparison.", flush=True)
+    finished = sum(t.state.is_finished() for t in study.trials)
+    remaining = max(0, args.trials - finished)
     workers = min(args.workers, remaining) if remaining else 0
-    print(f"Study: {study.study_name}; finished: {completed}; "
+    print(f"Study: {study.study_name}; finished: {finished}; "
           f"new: {remaining}; workers: {workers}; batch: {BATCH_SIZE}", flush=True)
     if workers:
         counts = [remaining // workers + (i < remaining % workers)
@@ -254,11 +280,11 @@ def main():
         # spawn avoids the CUDA-fork initialization problem.
         with ProcessPoolExecutor(max_workers=workers,
                                  mp_context=mp.get_context("spawn")) as pool:
-            futures = [pool.submit(run_worker, args, i, count, completed)
+            futures = [pool.submit(run_worker, args, i, count, finished)
                        for i, count in enumerate(counts)]
             for future in futures:
                 future.result()  # Surface worker exceptions.
-    study = create_study(args, existing=completed + remaining)
+    study = create_study(args, existing=finished + remaining)
     if study.best_trials:
         best = study.best_trial
         print(f"Best trial: {best.number}; accuracy: {best.value:.3f}")
