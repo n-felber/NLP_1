@@ -22,14 +22,20 @@ ROOT = Path(__file__).resolve().parents[1]
 def suggest_params(trial, model_name):
     params = {
         "learning_rate": trial.suggest_float("learning_rate", 1e-6, 1e-3, log=True),
-        "weight_decay": trial.suggest_categorical("weight_decay", [0.0, 1e-4, 1e-3, 1e-2, 1e-1]),
+        "weight_decay": trial.suggest_categorical(
+            "weight_decay", [0.0, 1e-4, 1e-3, 1e-2, 1e-1]
+        ),
         "dropout": trial.suggest_float("dropout", 0.0, 0.5),
         "layer_norm": trial.suggest_categorical("layer_norm", [False, True]),
         "batch_size": trial.suggest_categorical("batch_size", [64, 128, 256]),
-        "classifier_hidden_dim": trial.suggest_categorical("classifier_hidden_dim", [128, 256, 512]),
+        "classifier_hidden_dim": trial.suggest_categorical(
+            "classifier_hidden_dim", [128, 256, 512]
+        ),
     }
     if model_name == "gru":
-        params["rnn_hidden_dim"] = trial.suggest_categorical("rnn_hidden_dim", [64, 128, 256])
+        params["rnn_hidden_dim"] = trial.suggest_categorical(
+            "rnn_hidden_dim", [64, 128, 256]
+        )
         params["rnn_dropout"] = trial.suggest_float("rnn_dropout", 0.0, 0.4)
     return params
 
@@ -37,12 +43,15 @@ def suggest_params(trial, model_name):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", choices=("embeddings", "gru"), required=True)
-    parser.add_argument("--trials", type=int, default=20, help="Target total trials in the saved study")
+    parser.add_argument("--trials", type=int, default=20,
+                        help="Target total trials in the saved study")
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--patience", type=int, default=8)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
-    parser.add_argument("--smoke-test", action="store_true", help="Run one tiny trial without saving or contacting W&B")
+    parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"),
+                        default="auto")
+    parser.add_argument("--smoke-test", action="store_true",
+                        help="Run one tiny trial without saving or contacting W&B")
     args = parser.parse_args()
 
     device_name = args.device
@@ -163,8 +172,13 @@ def main():
         sampler=optuna.samplers.TPESampler(seed=args.seed),
         pruner=optuna.pruners.NopPruner(),  # Early stopping is already active.
     )
-    remaining = max(0, args.trials - len(study.trials))
-    print(f"Existing trials: {len(study.trials)}; new trials: {remaining}")
+    existing = len(study.trials)
+    if existing:
+        # A new sampler with the original seed would replay startup suggestions
+        # after a restart. Shift the seed according to the saved trial count.
+        study.sampler = optuna.samplers.TPESampler(seed=args.seed + existing)
+    remaining = max(0, args.trials - existing)
+    print(f"Existing trials: {existing}; new trials: {remaining}")
     if remaining:
         study.optimize(objective, n_trials=remaining)
     if study.best_trials:
