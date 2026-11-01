@@ -6,6 +6,7 @@ dependencies = [
     "datasets>=5.1.0",
     "gensim>=4.4.0",
     "nltk>=3.10.4",
+    "optuna>=5.0.0",
     "torch>=2.15.0",
     "wandb>=0.31.0",
 ]

@@ -1,6 +1,4 @@
-
-"""Train the word2vec + GRU/LSTM classifier on ART."""
-
+"""Train the frozen-word2vec + GRU/LSTM classifier on ART."""
 import argparse
 import json
 from pathlib import Path
@@ -28,18 +26,14 @@ def run_epoch(model, loader, device, optimizer=None, max_batches=None):
             if max_batches is not None and index >= max_batches:
                 break
 
-            inputs = {
-                field: batch[field].to(device)
-                for field in TEXT_FIELDS
-            }
+            inputs = {field: batch[field].to(device) for field in TEXT_FIELDS}
             inputs.update({
                 f"{field}_lengths": batch[f"{field}_lengths"]
                 for field in TEXT_FIELDS
             })
-
             targets = (batch["labels"] - 1).to(device)
             logits = model(inputs)
-            loss = F.cross_entropy(logits, targets)
+            loss = F.cross_entropy(logits, targets)  # Raw logits; no softmax
 
             if training:
                 optimizer.zero_grad(set_to_none=True)
@@ -63,6 +57,9 @@ def main():
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--rnn-hidden-dim", type=int, default=128)
     parser.add_argument("--classifier-hidden-dim", type=int, default=256)
+    parser.add_argument("--dropout", type=float, default=0.0)
+    parser.add_argument("--rnn-dropout", type=float, default=0.0)
+    parser.add_argument("--layer-norm", action="store_true")
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--patience", type=int, default=8)
     parser.add_argument("--seed", type=int, default=42)
@@ -72,7 +69,6 @@ def main():
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
-
     device_name = args.device
     if device_name == "auto":
         device_name = (
@@ -85,59 +81,50 @@ def main():
 
     with (ROOT / "data/vocab.json").open(encoding="utf-8") as file:
         vocab = json.load(file)
-
     data = load_from_disk(str(ROOT / "data/art"))
     matrix = torch.from_numpy(np.load(ROOT / "data/embedding_matrix.npy"))
-
     model = RNNClassifier(
         matrix,
         rnn_type=args.rnn,
         rnn_hidden_dim=args.rnn_hidden_dim,
         classifier_hidden_dim=args.classifier_hidden_dim,
+        dropout=args.dropout,
+        rnn_dropout=args.rnn_dropout,
+        use_layer_norm=args.layer_norm,
     ).to(device)
 
     train_loader = DataLoader(
-        ARTDataset(data["train"], vocab),
-        batch_size=args.batch_size,
-        shuffle=True,
-        collate_fn=collate_batch,
+        ARTDataset(data["train"], vocab), batch_size=args.batch_size,
+        shuffle=True, collate_fn=collate_batch,
     )
     val_loader = DataLoader(
-        ARTDataset(data["validation"], vocab),
-        batch_size=args.batch_size,
-        shuffle=False,
-        collate_fn=collate_batch,
+        ARTDataset(data["validation"], vocab), batch_size=args.batch_size,
+        shuffle=False, collate_fn=collate_batch,
     )
-
     optimizer = torch.optim.AdamW(
         [p for p in model.parameters() if p.requires_grad],
-        lr=args.learning_rate,
-        weight_decay=args.weight_decay,
+        lr=args.learning_rate, weight_decay=args.weight_decay,
     )
-
     run_name = (
-        f"{args.rnn}-h{args.rnn_hidden_dim}"
-        f"-lr{args.learning_rate:g}-bs{args.batch_size}"
-        f"-wd{args.weight_decay:g}"
+        f"{args.rnn}-h{args.rnn_hidden_dim}-lr{args.learning_rate:g}"
+        f"-bs{args.batch_size}-wd{args.weight_decay:g}"
+        f"-ch{args.classifier_hidden_dim}-drop{args.dropout:g}"
+        f"-rdrop{args.rnn_dropout:g}-ln{int(args.layer_norm)}"
     )
-
     with wandb.init(
-        project="nlp-hs26-project1",
-        name=run_name,
+        project="nlp-hs26-project1", name=run_name,
         config={**vars(args), "architecture": "rnn_final_hidden"},
         mode="disabled" if args.smoke_test else "online",
     ) as run:
         if args.smoke_test:
             train_loss, train_acc = run_epoch(
-                model, train_loader, device, optimizer, max_batches=2
+                model, train_loader, device, optimizer, max_batches=2,
             )
             val_loss, val_acc = run_epoch(
-                model, val_loader, device, max_batches=1
+                model, val_loader, device, max_batches=1,
             )
-            print(
-                f"Smoke test passed: train loss={train_loss:.4f}, "
-                f"val loss={val_loss:.4f}, val acc={val_acc:.3f}"
-            )
+            print(f"Smoke test passed: train loss={train_loss:.4f}, "
+                  f"val loss={val_loss:.4f}, val acc={val_acc:.3f}")
             return
 
         checkpoint_dir = ROOT / "checkpoints"
@@ -146,29 +133,21 @@ def main():
         best_accuracy, stale_epochs = -1.0, 0
 
         for epoch in range(1, args.epochs + 1):
-            train_loss, train_acc = run_epoch(
-                model, train_loader, device, optimizer
-            )
+            train_loss, train_acc = run_epoch(model, train_loader, device, optimizer)
             val_loss, val_acc = run_epoch(model, val_loader, device)
-
             run.log({
                 "epoch": epoch,
-                "train/loss": train_loss,
-                "train/accuracy": train_acc,
-                "val/loss": val_loss,
-                "val/accuracy": val_acc,
+                "train/loss": train_loss, "train/accuracy": train_acc,
+                "val/loss": val_loss, "val/accuracy": val_acc,
             })
-            print(
-                f"Epoch {epoch:02d}: train acc={train_acc:.3f}, "
-                f"val acc={val_acc:.3f}, val loss={val_loss:.4f}"
-            )
+            print(f"Epoch {epoch:02d}: train acc={train_acc:.3f}, "
+                  f"val acc={val_acc:.3f}, val loss={val_loss:.4f}")
 
             if val_acc > best_accuracy:
                 best_accuracy, stale_epochs = val_acc, 0
                 torch.save({
                     "model_state_dict": model.state_dict(),
-                    "epoch": epoch,
-                    "val_accuracy": val_acc,
+                    "epoch": epoch, "val_accuracy": val_acc,
                     "config": vars(args),
                 }, checkpoint_path)
                 run.summary["best_val_accuracy"] = best_accuracy

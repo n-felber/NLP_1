@@ -1,4 +1,3 @@
-
 """Train the frozen-word2vec baseline classifier on ART."""
 import argparse
 import json
@@ -28,10 +27,10 @@ def run_epoch(model, loader, device, optimizer=None, max_batches=None):
                 break
 
             inputs = {field: batch[field].to(device) for field in TEXT_FIELDS}
-            targets = (batch["labels"] - 1).to(device)  # ART: 1/2 -> 0/1
+            targets = (batch["labels"] - 1).to(device)  # ART labels 1/2 -> 0/1
 
             logits = model(inputs)
-            loss = F.cross_entropy(logits, targets)  # Raw logits, no softmax
+            loss = F.cross_entropy(logits, targets)  # Raw logits; no softmax
 
             if training:
                 optimizer.zero_grad(set_to_none=True)
@@ -53,6 +52,8 @@ def main():
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--hidden-dim", type=int, default=256)
+    parser.add_argument("--dropout", type=float, default=0.0)
+    parser.add_argument("--layer-norm", action="store_true")
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--patience", type=int, default=8)
     parser.add_argument("--seed", type=int, default=42)
@@ -70,7 +71,12 @@ def main():
         vocab = json.load(file)
     data = load_from_disk(str(ROOT / "data/art"))
     matrix = torch.from_numpy(np.load(ROOT / "data/embedding_matrix.npy"))
-    model = EmbeddingClassifier(matrix, hidden_dim=args.hidden_dim).to(device)
+    model = EmbeddingClassifier(
+        matrix,
+        hidden_dim=args.hidden_dim,
+        dropout=args.dropout,
+        use_layer_norm=args.layer_norm,
+    ).to(device)
 
     train_loader = DataLoader(
         ARTDataset(data["train"], vocab), batch_size=args.batch_size,
@@ -81,13 +87,14 @@ def main():
         shuffle=False, collate_fn=collate_batch,
     )
     optimizer = torch.optim.AdamW(
-        model.classifier.parameters(), lr=args.learning_rate,
-        weight_decay=args.weight_decay,
+        [p for p in model.parameters() if p.requires_grad],
+        lr=args.learning_rate, weight_decay=args.weight_decay,
     )
 
     run_name = (
         f"emb-lr{args.learning_rate:g}-bs{args.batch_size}"
-        f"-wd{args.weight_decay:g}"
+        f"-wd{args.weight_decay:g}-h{args.hidden_dim}"
+        f"-drop{args.dropout:g}-ln{int(args.layer_norm)}"
     )
     with wandb.init(
         project="nlp-hs26-project1", name=run_name,
@@ -103,7 +110,7 @@ def main():
             )
             print(f"Smoke test passed: train loss={train_loss:.4f}, "
                   f"val loss={val_loss:.4f}, val acc={val_acc:.3f}")
-            return  # No checkpoint or W&B upload during smoke test
+            return
 
         checkpoint_dir = ROOT / "checkpoints"
         checkpoint_dir.mkdir(exist_ok=True)
@@ -113,7 +120,6 @@ def main():
         for epoch in range(1, args.epochs + 1):
             train_loss, train_acc = run_epoch(model, train_loader, device, optimizer)
             val_loss, val_acc = run_epoch(model, val_loader, device)
-
             run.log({
                 "epoch": epoch,
                 "train/loss": train_loss, "train/accuracy": train_acc,
@@ -126,8 +132,7 @@ def main():
                 best_accuracy, stale_epochs = val_acc, 0
                 torch.save({
                     "model_state_dict": model.state_dict(),
-                    "epoch": epoch,
-                    "val_accuracy": val_acc,
+                    "epoch": epoch, "val_accuracy": val_acc,
                     "config": vars(args),
                 }, checkpoint_path)
                 run.summary["best_val_accuracy"] = best_accuracy

@@ -108,3 +108,14 @@
 - **My choice:** Set a maximum of 30 epochs and use early stopping with patience 8 based on **validation accuracy**. Save the checkpoint with the **highest validation accuracy**.
 - **Reasoning / implications:** I want stopping and checkpoint selection to optimize the metric I care about: accuracy. I will maximize validation accuracy, retain the best-performing checkpoint, and continue logging validation loss for diagnostic purposes. A patience of 8 gives the first baseline run room to improve.
 
+## Hyperparameter Optimization
+
+- **Available options:** Manual tuning, grid/random search, W&B Sweeps, or Optuna's TPE-based Bayesian optimization.
+- **My choice:** Use Optuna (TPE) to optimize hyperparameters jointly, with separate studies for Model A and GRU Model B. I will continue tracking each run in W&B and save the studies in SQLite to allow resuming.
+- **Reasoning / implications:** Joint optimization can find interactions between settings that sequential tuning could miss. I will maximize the best validation accuracy, keep the test set untouched, and use an initial budget of roughly 20–30 trials per model if time allows.
+
+## Hyperparameter Search Space
+
+- **Available options:** Tune learning rate, weight decay, dropout, normalization, hidden dimensions, and batch size; tune them independently or jointly.
+- **My choice:** Jointly search learning rate `1e-6`–`1e-3` (log scale), weight decay `{0, 1e-4, 1e-3, 1e-2, 1e-1}`, classifier dropout `0`–`0.5`, LayerNorm on/off, classifier hidden dimension `{128, 256, 512}`, and batch size `{64, 128, 256}`. For GRU, also search hidden dimension `{64, 128, 256}` and dropout between recurrent layers `0`–`0.4`.
+- **Reasoning / implications:** Both baseline models overfit, so I want to test dropout and weight decay alongside model capacity and learning rate. LayerNorm is an optional normalization step rather than a substitute for regularization. Very small learning rates might require more epochs, so I will interpret undertrained trials carefully.
