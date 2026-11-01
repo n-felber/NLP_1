@@ -82,4 +82,23 @@
 
 - **Available options:** One output logit with `BCEWithLogitsLoss`, or two output logits with `CrossEntropyLoss`.
 - **My choice:** Use two output logits (one for each hypothesis) and `CrossEntropyLoss`. Apply softmax only when probabilities are needed for interpretation or inference.
-- **Reasoning / implications:** I want separate scores for H1 and H2 and to choose the higher-scoring hypothesis. The classifier outputs raw logits; softmax converts logits to probabilities, while `CrossEntropyLoss` already incorporates the required normalization. I will map ART labels `1 → 0` and `2 → 1` for training.
+- **Reasoning / implications:** I want separate scores for H1 and H2 and to choose the higher-scoring hypothesis. `CrossEntropyLoss` applies log-softmax internally to the raw logits, so I must **not apply softmax before the loss** (which would apply normalization twice). I use softmax only when I need probabilities for interpretation or inference. I will map ART labels `1 → 0` and `2 → 1` for training.
+
+## Optimizer
+
+- **Available options:** Adam or AdamW.
+- **My choice:** AdamW; start with weight decay `0.01` for the baseline.
+- **Reasoning / implications:** I want adaptive optimization with decoupled weight decay. The initial weight decay is a baseline setting, not a tuned optimum.
+
+## Initial Learning Rate
+
+- **Available options:** Use a fixed initial learning rate or tune it immediately.
+- **My choice:** Start at `1e-3` and compare learning rates in later experiments.
+- **Reasoning / implications:** I want a reasonable baseline before spending time on hyperparameter optimization.
+
+## Training Duration and Early Stopping
+
+- **Available options:** Train for a fixed number of epochs or stop based on validation performance; monitor validation accuracy or validation loss.
+- **My choice:** Set a maximum of 30 epochs and use early stopping with patience 8 based on **validation accuracy**. Save the checkpoint with the **highest validation accuracy**.
+- **Reasoning / implications:** I want stopping and checkpoint selection to optimize the metric I care about: accuracy. I will maximize validation accuracy, retain the best-performing checkpoint, and continue logging validation loss for diagnostic purposes. A patience of 8 gives the first baseline run room to improve.
+
