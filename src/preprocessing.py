@@ -23,11 +23,13 @@ def tokenize(text):
 
 
 def encode(text, vocab):
-    """Convert text into vocabulary IDs."""
-    return [
+    """Convert text into token IDs, handling empty sequences."""
+    ids = [
         vocab.get(token, vocab["<UNK>"])
         for token in tokenize(text)
     ]
+
+    return ids if ids else [vocab["<UNK>"]]
 
 
 if __name__ == "__main__":
