@@ -74,9 +74,9 @@
 
 ## Batching
 
-- **Available options:** Small fixed batches, or the largest batch size that fits in GPU memory.
-- **My choice:** Use the largest practical batch size that fits in memory, but keep multiple batches per epoch even if the entire dataset would fit. I will determine the final size after testing the model on the training hardware.
-- **Reasoning / implications:** Larger batches can improve hardware utilization, but I still want multiple parameter updates per epoch. The feasible size depends on the model and GPU memory.
+- **Available options:** Smaller batches with more optimizer updates, or larger batches for faster epochs.
+- **My choice:** Use batch size `1024` for the new hyperparameter searches in both models, retaining earlier baseline results with their original batch sizes.
+- **Reasoning / implications:** On GPUHub, caching tokenization reduced Model A epoch time from ~17.6 seconds to ~0.34 seconds at batch size 1024; GRU took ~0.73 seconds. Batches of 2048 or 4096 were unexpectedly slower. A larger batch uses fewer optimizer steps per epoch, which may undertrain very small learning rates; I will distinguish throughput from validation quality.
 
 ## Dynamic Padding and Packed Sequences
 
@@ -111,11 +111,11 @@
 ## Hyperparameter Optimization
 
 - **Available options:** Manual tuning, grid/random search, W&B Sweeps, or Optuna's TPE-based Bayesian optimization.
-- **My choice:** Use Optuna (TPE) to optimize hyperparameters jointly, with separate studies for Model A and GRU Model B. I will continue tracking each run in W&B and save the studies in SQLite to allow resuming.
-- **Reasoning / implications:** Joint optimization can find interactions between settings that sequential tuning could miss. I will maximize the best validation accuracy, keep the test set untouched, and use an initial budget of roughly 20–30 trials per model if time allows.
+- **My choice:** Use Optuna (TPE) to optimize hyperparameters jointly, with separate studies for Model A and GRU Model B and W&B tracking per trial. I keep the first sequential Model A study in SQLite, and use a separate resumable file-based JournalStorage study for new fixed-batch parallel runs.
+- **Reasoning / implications:** Joint optimization can find interactions that sequential tuning could miss. JournalStorage supports multiple separate training processes on one machine, whereas SQLite is unsuitable for heavy parallel writes. Simultaneous GPU trials may compete for compute, and TPE learns from completed rather than still-running trials; I will measure throughput rather than assume linear speedup.
 
 ## Hyperparameter Search Space
 
 - **Available options:** Tune learning rate, weight decay, dropout, normalization, hidden dimensions, and batch size; tune them independently or jointly.
-- **My choice:** Jointly search learning rate `1e-6`–`1e-3` (log scale), weight decay `{0, 1e-4, 1e-3, 1e-2, 1e-1}`, classifier dropout `0`–`0.5`, LayerNorm on/off, classifier hidden dimension `{128, 256, 512}`, and batch size `{64, 128, 256}`. For GRU, also search hidden dimension `{64, 128, 256}` and dropout between recurrent layers `0`–`0.4`.
+- **My choice:** Jointly search learning rate `1e-6`–`1e-3` (log scale), weight decay `{0, 1e-4, 1e-3, 1e-2, 1e-1}`, classifier dropout `0`–`0.5`, LayerNorm on/off, and classifier hidden dimension `{128, 256, 512}`. For GRU, also search hidden dimension `{64, 128, 256}` and inter-layer dropout `0`–`0.4`. The new accelerated studies fix batch size at `1024`; the earlier 12 Model A trials searched `{64, 128, 256}`.
 - **Reasoning / implications:** Both baseline models overfit, so I want to test dropout and weight decay alongside model capacity and learning rate. LayerNorm is an optional normalization step rather than a substitute for regularization. Very small learning rates might require more epochs, so I will interpret undertrained trials carefully.
