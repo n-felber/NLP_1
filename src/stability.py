@@ -1,4 +1,4 @@
-"""Repeat selected Optuna configurations with independent random seeds.
+"""Compare original baseline and tuned configurations across matched random seeds.
 
 Runs only on TRAIN and VALIDATION. The test split is never loaded.
 """
@@ -43,6 +43,30 @@ WINNERS = {
 }
 
 
+# Original training-script defaults, except batch size/epoch cap (controlled below).
+# Baseline: original hyperparameters, but same data pipeline, batch size 1024,
+# maximum 50 epochs, patience 8, and seeds as the tuned stability experiment.
+BASELINES = {
+    "embeddings": {
+        "learning_rate": 1e-3,
+        "weight_decay": 0.01,
+        "dropout": 0.0,
+        "layer_norm": False,
+        "classifier_hidden_dim": 256,
+    },
+    "gru": {
+        "learning_rate": 1e-3,
+        "weight_decay": 0.01,
+        "dropout": 0.0,
+        "layer_norm": False,
+        "classifier_hidden_dim": 256,
+        "rnn_hidden_dim": 128,
+        "rnn_dropout": 0.0,
+        "bidirectional": False,
+    },
+}
+
+
 def build_model(name, embedding_matrix, config):
     if name == "embeddings":
         return EmbeddingClassifier(
@@ -69,7 +93,7 @@ def seed_everything(seed):
 
 def run_one(name, seed, args, train_data, val_data, matrix, device):
     seed_everything(seed)
-    config = WINNERS[name]
+    config = (BASELINES if args.configuration == "baseline" else WINNERS)[name]
     model = build_model(name, matrix, config).to(device)
     train = DataLoader(
         train_data, batch_size=8 if args.smoke_test else BATCH_SIZE,
@@ -85,16 +109,18 @@ def run_one(name, seed, args, train_data, val_data, matrix, device):
         lr=config["learning_rate"], weight_decay=config["weight_decay"],
     )
     epoch_fn = embedding_epoch if name == "embeddings" else rnn_epoch
-    name_for_run = f"stability-{name}-seed{seed}"
+    name_for_run = f"stability-{args.configuration}-{name}-seed{seed}"
     with wandb.init(
         project="nlp-hs26-project1", entity=args.wandb_entity,
-        group=f"stability-expanded_v2-{name}", name=name_for_run,
+        group=f"stability-{args.configuration}-{name}", name=name_for_run,
         config={**config, "seed": seed, "architecture": name,
                 "epochs": args.epochs, "patience": args.patience,
-                "batch_size": BATCH_SIZE, "source_study": "expanded_v2"},
+                "batch_size": BATCH_SIZE, "configuration": args.configuration,
+                "source_study": ("original_baseline_hparams" if
+                                  args.configuration == "baseline" else "expanded_v2")},
         mode="disabled" if args.smoke_test else "online",
     ) as run:
-        checkpoint = ROOT / "checkpoints" / f"stability_{name}_s{seed}_{run.id}_best.pt"
+        checkpoint = ROOT / "checkpoints" / f"stability_{args.configuration}_{name}_s{seed}_{run.id}_best.pt"
         if not args.smoke_test:
             checkpoint.parent.mkdir(parents=True, exist_ok=True)
         best_acc, best_epoch, stale = -1.0, 0, 0
@@ -129,7 +155,8 @@ def run_one(name, seed, args, train_data, val_data, matrix, device):
         run.summary["best_val_accuracy"] = best_acc
         run.summary["best_epoch"] = best_epoch
         run.summary["last_epoch"] = last_epoch
-        return {"model": name, "seed": seed, "best_val_accuracy": best_acc,
+        return {"model": name, "configuration": args.configuration, "seed": seed,
+                "best_val_accuracy": best_acc,
                 "best_epoch": best_epoch, "last_epoch": last_epoch,
                 "checkpoint": str(checkpoint) if not args.smoke_test else "",
                 "wandb_url": run.url if not args.smoke_test else ""}
@@ -138,11 +165,12 @@ def run_one(name, seed, args, train_data, val_data, matrix, device):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", choices=("both", "embeddings", "gru"), default="both")
+    parser.add_argument("--configuration", choices=("tuned", "baseline"), default="tuned")
     parser.add_argument("--seeds", nargs="+", type=int, default=[42, 43, 44, 45, 46])
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--patience", type=int, default=8)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
-    parser.add_argument("--wandb-entity", default="user-university")
+    parser.add_argument("--wandb-entity", default="noe-felber-hochschule-luzern")
     parser.add_argument("--smoke-test", action="store_true")
     args = parser.parse_args()
     if args.epochs < 1 or args.patience < 1 or not args.seeds or len(set(args.seeds)) != len(args.seeds):
@@ -161,13 +189,15 @@ def main():
     models = ("embeddings", "gru") if args.model == "both" else (args.model,)
     rows = []
     report_dir = ROOT / "reports" / "stability"
+    output_csv = report_dir / ("baseline_results.csv" if args.configuration == "baseline"
+                               else "results.csv")
     if not args.smoke_test:
         report_dir.mkdir(parents=True, exist_ok=True)
     for model in models:
         for seed in args.seeds:
             rows.append(run_one(model, seed, args, train_data, val_data, matrix, device))
             if not args.smoke_test:
-                with (report_dir / "results.csv").open("w", newline="") as file:
+                with output_csv.open("w", newline="") as file:
                     writer = csv.DictWriter(file, fieldnames=list(rows[0]))
                     writer.writeheader()
                     writer.writerows(rows)
@@ -178,7 +208,7 @@ def main():
     if args.smoke_test:
         print("Stability smoke test passed (not a meaningful accuracy estimate).")
     else:
-        print(f"Saved all runs to {report_dir / 'results.csv'}")
+        print(f"Saved all runs to {output_csv}")
 
 
 if __name__ == "__main__":
