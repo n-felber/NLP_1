@@ -1,0 +1,75 @@
+{
+  "embeddings": {
+    "model": "embeddings",
+    "checkpoint": "stability_baseline_embeddings_s46_tv4ie5ev_best.pt",
+    "checkpoint_sha256": "d2913ad85be2753820919fc2490a4a5cd4f37a498d3c0558c3a8ae1c14461bd5",
+    "selection_val_accuracy": 0.662,
+    "selection_epoch": 28,
+    "config": {
+      "learning_rate": 0.001,
+      "weight_decay": 0.01,
+      "dropout": 0.0,
+      "layer_norm": false,
+      "classifier_hidden_dim": 256,
+      "seed": 46,
+      "batch_size": 1024
+    },
+    "test_examples": 1532,
+    "test_correct": 782,
+    "test_accuracy": 0.5104438642297651,
+    "test_loss": 0.8827029195840302,
+    "confusion_matrix_true_rows_pred_cols": [
+      [
+        378,
+        403
+      ],
+      [
+        347,
+        404
+      ]
+    ],
+    "test_recall_label_1": 0.4839948783610755,
+    "test_recall_label_2": 0.5379494007989347
+  },
+  "gru": {
+    "model": "gru",
+    "checkpoint": "hpo_gru_expanded_v2_t108_72n7o6dt_best.pt",
+    "checkpoint_sha256": "e704a8bd88f5d7e8b08631de831da8a63a85d7afd166d8fa09dee62bb6eb8fdc",
+    "selection_val_accuracy": 0.709,
+    "selection_epoch": 26,
+    "config": {
+      "learning_rate": 0.0012430354675090896,
+      "weight_decay": 0.1,
+      "dropout": 0.6990971478917894,
+      "layer_norm": true,
+      "classifier_hidden_dim": 256,
+      "rnn_hidden_dim": 64,
+      "rnn_dropout": 0.5905068882070185,
+      "bidirectional": false,
+      "batch_size": 1024,
+      "architecture": "gru",
+      "seed": 42,
+      "epochs": 50,
+      "patience": 8,
+      "optuna_study": "art_gru_expanded_v2_tpe",
+      "optuna_trial": 108,
+      "search_version": "expanded_v2"
+    },
+    "test_examples": 1532,
+    "test_correct": 825,
+    "test_accuracy": 0.5385117493472585,
+    "test_loss": 0.9534783226391665,
+    "confusion_matrix_true_rows_pred_cols": [
+      [
+        414,
+        367
+      ],
+      [
+        340,
+        411
+      ]
+    ],
+    "test_recall_label_1": 0.5300896286811779,
+    "test_recall_label_2": 0.5472703062583223
+  }
+}

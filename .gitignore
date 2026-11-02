@@ -1,24 +1,22 @@
-
-# Python
+# Python and local OS artifacts
 .venv/
 __pycache__/
 *.py[cod]
 .DS_Store
 
-# Local data and model artifacts
+# Large local inputs, model weights and experiment outputs
 data/
 checkpoints/
 outputs/
 wandb/
+studies/
+reports/hpo/
+reports/stability/
+reports/final_test/errors_*.csv
 
-# Secrets
+# Credentials
 .env
 .env.*
 
 # Jupyter
 .ipynb_checkpoints/
-
-# Optuna studies and generated experiment reports
-studies/
-reports/
-*.zip
