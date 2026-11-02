@@ -17,3 +17,8 @@ wandb/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Optuna studies and generated experiment reports
+studies/
+reports/
+*.zip
